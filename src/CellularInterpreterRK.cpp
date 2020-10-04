@@ -1,13 +1,101 @@
 #include "CellularInterpreterRK.h"
 
+static Logger _log("app.cellinterp");
+
+CellularInterpreter *CellularInterpreter::instance = 0;
+CellularInterpreterBlinkManager *CellularInterpreterBlinkManager::instance = 0;
+
+CellularInterpreterParser::CellularInterpreterParser() {
+
+}
+CellularInterpreterParser::~CellularInterpreterParser() {
+
+}
+
+void CellularInterpreterParser::clear() {
+    command = "";
+    args.clear();
+}
+
+void CellularInterpreterParser::parse(const char *commandLineIn) {
+    String curPart;
+    bool inQuote = false;
+    bool isAT = false;
+    bool isPlus = false;
+    
+    if (strncmp(commandLineIn, "AT", 2) == 0) {
+        isAT = true;
+    }
+    else if (commandLineIn[0] == '+') {
+        isPlus = true;
+    }
+    
+    for(const char *cp = commandLineIn; *cp; cp++) {
+        if (isAT) {
+            if (*cp == '=') {
+                // AT command ends at =
+                command = curPart;
+                curPart = "";
+                isAT = false;
+            }
+        }
+        else if (isPlus) {
+            if (*cp == ':') {
+                command = curPart;
+                curPart = "";
+                isPlus = false;
+                if (cp[1] == ' ') {
+                    // Skip space after : as well
+                    cp++;
+                }
+            }
+        }
+        else if (*cp == '"') {
+            inQuote = !inQuote;
+        }
+        else if (!inQuote && *cp == ',') {
+            // Comma separator, not in a quote
+            args.push_back(curPart);
+            curPart = "";
+        }
+        else {
+            // Include in this string
+            curPart += *cp;
+        }
+        
+    }
+    if (curPart.length() != 0) {
+        args.push_back(curPart);
+    }
+}
+
+String CellularInterpreterParser::getArgString(size_t index) const {
+    if (index < args.size()) {
+        return args[index];
+    }
+    else {
+        return "";
+    }
+}
+
+int CellularInterpreterParser::getArgInt(size_t index) const {
+    return atoi(getArgString(index));
+}
+
+long CellularInterpreterParser::getArgLongHex(size_t index) const {
+    char *end;
+    return strtol(getArgString(index).c_str(), &end, 16);
+}
 
 
 CellularInterpreter::CellularInterpreter() : StreamLogHandler(*this, LOG_LEVEL_TRACE) {
-
+    instance = this;
 }
 
 CellularInterpreter::~CellularInterpreter() {
     // TODO: Deallocate buffers
+
+    // TODO: Deallocate objects in commandMonitors
 }
 
 void CellularInterpreter::setup() {
@@ -19,13 +107,15 @@ void CellularInterpreter::setup() {
         }
     }
 
-	// Add this handler into the system log manager
+	// Add this callback into the system log manager
 	LogManager::instance()->addHandler(this);
 
 }
 
 void CellularInterpreter::loop() {
-    inLoop = true;
+    // We skip over logs generated from this thread to prevent recursively
+    // generating logs
+    loopThread = os_thread_current(NULL);
 	
     while(!toProcessLines.empty()) {
         CellularInterpreterLineBuffer *currentRead = toProcessLines.front();
@@ -38,29 +128,80 @@ void CellularInterpreter::loop() {
 
     processTimeouts();
 
-    inLoop = false;
+    loopThread = NULL;
 }
 
-void CellularInterpreter::addCommandMonitor(CellularInterpreterCommandMonitor *mon) {
+void CellularInterpreter::blinkNotification(uint32_t timesColor, size_t repeats) {
+
+    uint32_t color = (timesColor & 0x00ffffff);
+    size_t times = (timesColor >> 24) & 0x0f; 
+    
+    CellularInterpreterBlinkManager *blinkManager = CellularInterpreterBlinkManager::getInstance();
+    if (blinkManager) {
+        CellularInterpreterBlinkPatternBlink *pat = new CellularInterpreterBlinkPatternBlink();
+        if (pat) {
+            pat->withSlowBlink(color, times).withRepeats(repeats);
+            blinkManager->addBlinkPattern(pat);
+        }
+    }
+    
+}
+
+
+void CellularInterpreter::addLogMonitor(CellularInterpreterLogMonitor *mon) {
+    logMonitors.push_back(mon);
+}
+
+void CellularInterpreter::addLogMonitor(const char *category, const char *level, const char *matchString, CellularInterpreterLogCallback callback) {
+    CellularInterpreterLogMonitor *mon = new CellularInterpreterLogMonitor();
+    
+    if (category) {
+        mon->category = category;
+    }
+    if (level) {
+        mon->level = level;
+    }
+    if (matchString) {
+        mon->matchString = matchString;
+    }
+    mon->callback = callback;
+
+    addLogMonitor(mon);
+}
+
+
+void CellularInterpreter::addModemMonitor(CellularInterpreterModemMonitor *mon) {
     commandMonitors.push_back(mon);
 }
 
-void CellularInterpreter::addUrcHandler(const char *urc, CellularInterpreterCallback handler) {
-    CellularInterpreterCommandMonitor *mon = new CellularInterpreterCommandMonitor();
-    mon->command = urc;
-    mon->reasonFlags = CellularInterpreterCommandMonitor::REASON_PLUS;
-    mon->timeout = 0;
-    mon->handler = handler;
+void CellularInterpreter::addModemMonitor(const char *cmdName, uint32_t reasonFlags, CellularInterpreterModemCallback callback, unsigned long timeout) {
+    CellularInterpreterModemMonitor *mon = new CellularInterpreterModemMonitor();
+    mon->command = cmdName;
+    mon->reasonFlags = reasonFlags;
+    mon->timeout = timeout;
+    mon->callback = callback;
 
-    addCommandMonitor(mon);    
+    addModemMonitor(mon);    
+}
+
+
+void CellularInterpreter::addUrcHandler(const char *urc, CellularInterpreterModemCallback callback) {
+    CellularInterpreterModemMonitor *mon = new CellularInterpreterModemMonitor();
+    mon->command = urc;
+    mon->reasonFlags = CellularInterpreterModemMonitor::REASON_PLUS;
+    mon->timeout = 0;
+    mon->callback = callback;
+
+    addModemMonitor(mon);    
 }
 
 
 size_t CellularInterpreter::write(uint8_t c) {
-    // Do not add any Log.* statements in this function!
-    if (inLoop) {
+    // Do not add any _log.* statements in this function!
+    if (loopThread && os_thread_is_current(loopThread)) {
         return 1;
     }
+
     if (currentWrite == 0) {
         // See if a line buffer is available now
         if (!freeLines.empty()) {
@@ -152,21 +293,34 @@ void CellularInterpreter::processLine(char *lineBuffer) {
     // col=3 token=>
     // col=4 token=AT+COPS=3,2
 
-    // Log.info("processLine %s", lineBuffer);
+
+    // _log.info("processLine %s", lineBuffer);
+
+    const size_t MAX_COL_TOKENS = 4;
+    char *colTokens[MAX_COL_TOKENS];
 
     bool isGen3 = false;
+    bool isLogger = false;
     bool toModem = false;
     char *command = NULL;
     char *saveptr; 
+
     char *token = strtok_r(lineBuffer, " ", &saveptr);
-    for(int col = 0; token; col++) {
+    for(size_t col = 0; token; col++) {
+        if (col < MAX_COL_TOKENS) {
+            colTokens[col] = token;
+        }
         if (col == 1) {
             if (strcmp(token, "AT") == 0) {
                 isGen3 = false;
             }
             else
             if (strcmp(token, "[ncp.at]") == 0) {
-                isGen3 = false;
+                isGen3 = true;
+            }
+            else 
+            if (token[0] == '[') {
+                isLogger = true;
             }
             else {
                 // Not a statement we care about, ignore the rest of this line.
@@ -174,6 +328,47 @@ void CellularInterpreter::processLine(char *lineBuffer) {
             }
         }
 
+        if (isLogger) {
+            // Non-modem logging messages:
+            // 0000011877 [hal] ERROR: Failed to power off modem
+            // 0000011878 [hal] TRACE: Modem already on
+            // 0000011879 [hal] TRACE: Setting UART voltage translator state 1
+
+            // 0: Timestamp
+            // 1: Category ([hal], [app], etc.)
+            // 2: Level (TRACE, INFO, ERROR etc.)
+            // 3: rest of the message
+            if (col == 2) {
+                char *cp;
+
+                // Remove the square brackets from category
+                if (colTokens[1][0] == '[') {
+                    cp = strrchr(colTokens[1], ']');
+                    if (cp) {
+                        ++colTokens[1];
+                        *cp = 0;
+                    }
+                }
+
+                // Rest of the line after this token is the message
+                char *msg = &token[strlen(token) + 1];
+
+                // Remove the : from the end of the level
+                cp = strrchr(colTokens[2], ':');
+                if (cp) {
+                    *cp = 0;
+                }
+            
+                char *end;
+                long ts = strtol(colTokens[0], &end, 10);
+
+                // _log.info("logger found 0:%s 1:%s 2:%s msg:%s", colTokens[0], colTokens[1], colTokens[2], msg);
+
+                processLog(ts, colTokens[1], colTokens[2], msg);
+                break;
+            }
+        }
+        else
         if (isGen3) {
             // Gen3
             if (col == 3) {
@@ -239,16 +434,16 @@ void CellularInterpreter::processCommand(char *command, bool toModem) {
             ignoreNextSend = false;
             return;
         }
-        Log.info("send command %s", command);        
-        callCommandMonitors(CellularInterpreterCommandMonitor::REASON_SEND, command); 
+        _log.info("send command %s", command);        
+        callCommandMonitors(CellularInterpreterModemMonitor::REASON_SEND, command); 
     }
     else {
         // Receiving data from modem
         if (command[0] == '+') {
             // + response to a command, or a URC
-            Log.info("recv + %s", command);        
+            _log.info("recv + %s", command);        
 
-            callCommandMonitors(CellularInterpreterCommandMonitor::REASON_PLUS, command); 
+            callCommandMonitors(CellularInterpreterModemMonitor::REASON_PLUS, command); 
         }
         else 
         if (strcmp(command, "@") == 0) {
@@ -263,13 +458,13 @@ void CellularInterpreter::processCommand(char *command, bool toModem) {
         }
         else 
         if (strcmp(command, "OK") == 0) {
-            Log.info("recv %s", command);        
-            callCommandMonitors(CellularInterpreterCommandMonitor::REASON_OK, command); 
+            _log.info("recv %s", command);        
+            callCommandMonitors(CellularInterpreterModemMonitor::REASON_OK, command); 
         }
         else 
         if (strncmp(command, "ERROR", 5) == 0) {
-            Log.info("recv %s", command);       
-            callCommandMonitors(CellularInterpreterCommandMonitor::REASON_ERROR, command); 
+            _log.info("recv %s", command);       
+            callCommandMonitors(CellularInterpreterModemMonitor::REASON_ERROR, command); 
         }
         else {
             // There are a bunch of other responses here like:
@@ -282,19 +477,19 @@ void CellularInterpreter::processCommand(char *command, bool toModem) {
 
 void CellularInterpreter::callCommandMonitors(uint32_t reasonFlags, const char *command) {
     // Check command monitors
-    for (std::vector<CellularInterpreterCommandMonitor *>::iterator it = commandMonitors.begin() ; it != commandMonitors.end(); ++it) {
-        CellularInterpreterCommandMonitor *mon = *it;
+    for (std::vector<CellularInterpreterModemMonitor *>::iterator it = commandMonitors.begin() ; it != commandMonitors.end(); ++it) {
+        CellularInterpreterModemMonitor *mon = *it;
         if (strncmp(&command[1], mon->command.c_str(), mon->command.length()) == 0) {
             if (command[mon->command.length() + 1] == ':') {
                 // Matching command or URC
                 if ((reasonFlags & mon->reasonFlags) != 0) {
                     // Handler is interested in this reason
-                    if (mon->handler) {
-                        mon->handler(reasonFlags, command);
+                    if (mon->callback) {
+                        mon->callback(reasonFlags, command);
                     }
                 }
 
-                if ((reasonFlags & CellularInterpreterCommandMonitor::REASON_SEND) != 0) {
+                if ((reasonFlags & CellularInterpreterModemMonitor::REASON_SEND) != 0) {
                     // Sending a command, start timeout
                     if (mon->timeout) {
                         mon->nextTimeout = System.millis() + mon->timeout;
@@ -304,7 +499,7 @@ void CellularInterpreter::callCommandMonitors(uint32_t reasonFlags, const char *
                     }
                 }
                 else
-                if ((reasonFlags & (CellularInterpreterCommandMonitor::REASON_OK | CellularInterpreterCommandMonitor::REASON_ERROR)) != 0) {
+                if ((reasonFlags & (CellularInterpreterModemMonitor::REASON_OK | CellularInterpreterModemMonitor::REASON_ERROR)) != 0) {
                     // On OK or ERROR, clear timeout
                     mon->nextTimeout = 0;
                 }                    
@@ -315,13 +510,13 @@ void CellularInterpreter::callCommandMonitors(uint32_t reasonFlags, const char *
 
 
 void CellularInterpreter::processTimeouts() {
-    for (std::vector<CellularInterpreterCommandMonitor *>::iterator it = commandMonitors.begin() ; it != commandMonitors.end(); ++it) {
-        CellularInterpreterCommandMonitor *mon = *it;
+    for (std::vector<CellularInterpreterModemMonitor *>::iterator it = commandMonitors.begin() ; it != commandMonitors.end(); ++it) {
+        CellularInterpreterModemMonitor *mon = *it;
 
         if (mon->nextTimeout != 0 && mon->nextTimeout < System.millis()) {
             // Timeout occurred
-            Log.info("timeout %s", mon->command.c_str());
-            callCommandMonitors(CellularInterpreterCommandMonitor::REASON_TIMEOUT, mon->command); 
+            _log.info("timeout %s", mon->command.c_str());
+            callCommandMonitors(CellularInterpreterModemMonitor::REASON_TIMEOUT, mon->command); 
 
             mon->nextTimeout = 0;
         }
@@ -329,13 +524,238 @@ void CellularInterpreter::processTimeouts() {
 
 }
 
+void CellularInterpreter::processLog(long ts, const char *category, const char *level, const char *msg) {
+    
+    // _log.info("processLog testing ts=%ld category=%s level=%s msg=%s", ts, category, level, msg);
 
+    for (std::vector<CellularInterpreterLogMonitor *>::iterator it = logMonitors.begin() ; it != logMonitors.end(); ++it) {
+        CellularInterpreterLogMonitor *mon = *it;
 
-
-CellularInterpreterCommandMonitor::CellularInterpreterCommandMonitor() {
+        bool match = true;
+        if (match && mon->category.length() > 0 && !mon->category.equals(category)) {
+            match = false;
+        }
+        if (match && mon->level.length() > 0 && !mon->level.equals(level)) {
+            match = false;
+        }
+        if (match && mon->matchString.length() > 0 && strstr(msg, mon->matchString.c_str()) == 0) {
+            match = false;
+        }
+        if (match) {
+            _log.info("processLog match ts=%ld category=%s level=%s msg=%s", ts, category, level, msg);
+            mon->callback(ts, category, level, msg);
+        }
+    }
 }
 
-CellularInterpreterCommandMonitor::~CellularInterpreterCommandMonitor() {
+
+CellularInterpreterBlinkPattern::CellularInterpreterBlinkPattern() {
+}
+
+CellularInterpreterBlinkPattern::~CellularInterpreterBlinkPattern() {
+}
+
+void CellularInterpreterBlinkPattern::callStart() {
+    curRepeat = 0;
+    start();
+}
+
+bool CellularInterpreterBlinkPattern::callRun() {
+    bool done = false;
+
+    if (run()) {
+        // Done with sequence. Should we repeat?
+        if (++curRepeat < repeats) {
+            // Yes
+            start();
+        }
+        else {
+            // No, really done now
+            done = true;
+        }
+    }
+    return done;
+}
+
+// [static]
+void CellularInterpreterBlinkPattern::setColor(uint32_t color) {
+    uint8_t r, g, b;
+
+    r = (uint8_t)(color >> 16);
+    g = (uint8_t)(color >> 8);
+    b = (uint8_t)color;
+
+    RGB.color(r, g, b);
 }
 
 
+CellularInterpreterBlinkPatternBlink::CellularInterpreterBlinkPatternBlink() {
+
+}
+
+CellularInterpreterBlinkPatternBlink::~CellularInterpreterBlinkPatternBlink() {
+}
+
+CellularInterpreterBlinkPatternBlink &CellularInterpreterBlinkPatternBlink::withSlowBlink(uint32_t color, size_t blinks) {
+    this->onColor = color;
+    this->blinks = blinks;
+    return *this;
+}
+
+
+void CellularInterpreterBlinkPatternBlink::start() {
+    stateHandler = &CellularInterpreterBlinkPatternBlink::stateStart;
+}
+
+bool CellularInterpreterBlinkPatternBlink::run() {
+    return stateHandler(*this);
+}
+
+bool CellularInterpreterBlinkPatternBlink::stateStart() {
+    curBlink = 0;
+    // RGB.control will be enabled and the LED is off when start() is called
+    stateTime = millis();
+    stateHandler = &CellularInterpreterBlinkPatternBlink::stateBeforeOff;
+
+    return false;
+}
+bool CellularInterpreterBlinkPatternBlink::stateBeforeOff() {
+    if (millis() - stateTime >= beforeOffMs) {
+        setColor(onColor);
+        stateTime = millis();
+        stateHandler = &CellularInterpreterBlinkPatternBlink::stateOn;
+    }
+    return false;
+}
+bool CellularInterpreterBlinkPatternBlink::stateOn() {
+    if (millis() - stateTime >= onPeriodMs) {
+        setColor(offColor);
+        stateTime = millis();
+        stateHandler = &CellularInterpreterBlinkPatternBlink::stateOff;
+    }
+
+    return false;
+}
+bool CellularInterpreterBlinkPatternBlink::stateOff() {
+    if (millis() - stateTime >= offPeriodMs) {
+        stateTime = millis();
+        if (++curBlink < blinks) {
+            setColor(onColor);
+            stateHandler = &CellularInterpreterBlinkPatternBlink::stateOn;
+        }
+        else {
+            stateHandler = &CellularInterpreterBlinkPatternBlink::stateAfterOff;
+        }
+    }
+
+    return false;
+}
+bool CellularInterpreterBlinkPatternBlink::stateAfterOff() {
+    if (millis() - stateTime >= afterOffMs) {
+        // Done!
+        return true;
+    }
+
+    return false;
+}
+
+
+CellularInterpreterBlinkManager::CellularInterpreterBlinkManager() {
+    instance = this;
+}
+
+CellularInterpreterBlinkManager::~CellularInterpreterBlinkManager() {
+
+}
+
+void CellularInterpreterBlinkManager::setup() {
+}
+
+void CellularInterpreterBlinkManager::loop() {
+    if (curPattern == 0 && !patternQueue.empty()) {
+        curPattern = patternQueue.front();
+        patternQueue.pop_front();
+
+        // About to start a pattern. Set direct RGB control and turn the LED off (color = black)
+        RGB.control(true);
+        CellularInterpreterBlinkPattern::setColor(0x000000);
+
+        curPattern->callStart();
+    }
+    if (curPattern) {
+        if (curPattern->callRun()) {
+            // Done with this pattern
+            curPattern = 0;
+            if (patternQueue.empty()) {
+                // No more patterns to display, restore default RGB behavior
+                RGB.control(false);
+            }
+        }
+    }
+}
+
+void CellularInterpreterBlinkManager::addBlinkPattern(CellularInterpreterBlinkPattern *pat) {
+    patternQueue.push_back(pat);
+}
+
+/*
+RGB_COLOR_BLUE : blue (0x000000ff)
+RGB_COLOR_GREEN : green (0x0000ff00)
+RGB_COLOR_CYAN : cyan (0x0000ffff)
+RGB_COLOR_RED : red (0x00ff0000)
+*/
+
+
+//
+// CellularInterpreterCheckNcpFailure
+//
+
+CellularInterpreterCheckNcpFailure::CellularInterpreterCheckNcpFailure() {
+}
+
+CellularInterpreterCheckNcpFailure::~CellularInterpreterCheckNcpFailure() {
+}
+
+void CellularInterpreterCheckNcpFailure::setup(CellularInterpreterCallback callback) {
+    // A better choice would have been
+    //      [hal] ERROR: No response from NCP
+    // however that message never gets picked up by the log handler for reasons that
+    // are not obvious to me.
+
+    CellularInterpreter::getInstance()->addModemMonitor("AT", CellularInterpreterModemMonitor::REASON_TIMEOUT, 
+        [](uint32_t, const char *) {
+            _log.info("CellularInterpreterCheckNcpFailure callback called");
+        },
+        800); // timeout milliseconds
+    
+    /*
+    logMonitor.category = "hal";
+    logMonitor.level = "ERROR";
+    logMonitor.matchString = "Failed to power off modem";
+    logMonitor.callback = [this, callback](long ts, const char *category, const char *level, const char *msg) {
+        _log.info("CellularInterpreterCheckNcpFailure callback called");
+        if (noResponseCount >= 0) {
+            if (++noResponseCount >= 2) {
+                _log.info("checkNcpFailure detected");
+                if (callback) {
+                    callback();
+                }
+                 CellularInterpreter::getInstance()->blinkNotification(CellularInterpreter::BLINK_NCP_FAILURE, 3);
+                noResponseCount = -1;
+            }
+        }
+    };
+    
+    CellularInterpreter::getInstance()->addLogMonitor(&logMonitor);
+    */
+
+}
+
+// static 
+CellularInterpreterCheckNcpFailure *CellularInterpreterCheckNcpFailure::check(CellularInterpreterCallback callback) {
+    CellularInterpreterCheckNcpFailure *obj = new CellularInterpreterCheckNcpFailure();
+    if (obj) {
+        obj->setup(callback);
+    }
+    return obj;
+}

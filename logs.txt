@@ -1,0 +1,106 @@
+Boron LTE with bad modem (no response from NCP)
+
+0000001091 [net.ppp.client] TRACE: PPP netif -> 8
+0000011877 [hal] ERROR: Failed to power off modem
+0000011878 [hal] TRACE: Modem already on
+0000011879 [hal] TRACE: Setting UART voltage translator state 1
+0000012880 [ncp.at] TRACE: > AT
+0000013880 [ncp.at] TRACE: > AT
+0000014880 [ncp.at] TRACE: > AT
+0000015880 [ncp.at] TRACE: > AT
+0000016880 [ncp.at] TRACE: > AT
+0000017880 [ncp.at] TRACE: > AT
+0000018880 [ncp.at] TRACE: > AT
+0000019880 [ncp.at] TRACE: > AT
+0000020880 [ncp.at] TRACE: > AT
+0000021880 [ncp.at] TRACE: > AT
+0000022880 [ncp.at] TRACE: > AT
+0000023880 [ncp.at] TRACE: > AT
+0000024880 [ncp.at] TRACE: > AT
+0000025880 [ncp.at] TRACE: > AT
+0000026880 [ncp.at] TRACE: > AT
+0000027880 [ncp.at] TRACE: > AT
+0000028880 [ncp.at] TRACE: > AT
+0000029880 [ncp.at] TRACE: > AT
+0000030880 [ncp.at] TRACE: > AT
+0000031880 [ncp.at] TRACE: > AT
+0000033880 [ncp.at] TRACE: > AT
+0000034880 [ncp.at] TRACE: > AT
+0000035880 [ncp.at] TRACE: > AT
+0000036880 [ncp.at] TRACE: > AT
+0000037880 [ncp.at] TRACE: > AT
+0000038880 [ncp.at] TRACE: > AT
+0000039880 [ncp.at] TRACE: > AT
+0000040880 [ncp.at] TRACE: > AT
+0000041880 [ncp.at] TRACE: > AT
+0000042880 [ncp.at] TRACE: > AT
+0000043880 [ncp.at] TRACE: > AT
+0000044880 [ncp.at] TRACE: > AT
+0000045880 [ncp.at] TRACE: > AT
+0000046880 [ncp.at] TRACE: > AT
+0000047880 [ncp.at] TRACE: > AT
+0000048880 [ncp.at] TRACE: > AT
+0000049880 [ncp.at] TRACE: > AT
+0000050880 [ncp.at] TRACE: > AT
+0000051880 [ncp.at] TRACE: > AT
+0000052880 [ncp.at] TRACE: > AT
+0000053880 [hal] ERROR: No response from NCP
+0000053880 [hal] TRACE: Setting UART voltage translator state 0
+0000053881 [hal] TRACE: Hard resetting the modem
+0000064882 [hal] TRACE: Setting UART voltage translator state 0
+0000064883 [hal] TRACE: Modem already off
+0000064983 [hal] TRACE: Powering modem on
+0000065133 [hal] TRACE: Modem powered on
+0000065134 [hal] TRACE: Setting UART voltage translator state 1
+0000066135 [ncp.at] TRACE: > AT
+0000067135 [ncp.at] TRACE: > AT
+0000068135 [ncp.at] TRACE: > AT
+0000069135 [ncp.at] TRACE: > AT
+0000070135 [ncp.at] TRACE: > AT
+0000071135 [ncp.at] TRACE: > AT
+0000072135 [ncp.at] TRACE: > AT
+0000073135 [ncp.at] TRACE: > AT
+0000074135 [ncp.at] TRACE: > AT
+0000075135 [ncp.at] TRACE: > AT
+0000076135 [ncp.at] TRACE: > AT
+0000077135 [ncp.at] TRACE: > AT
+0000078135 [ncp.at] TRACE: > AT
+0000079135 [ncp.at] TRACE: > AT
+0000080135 [ncp.at] TRACE: > AT
+0000081135 [ncp.at] TRACE: > AT
+0000082135 [ncp.at] TRACE: > AT
+0000083135 [ncp.at] TRACE: > AT
+0000084135 [ncp.at] TRACE: > AT
+0000085135 [ncp.at] TRACE: > AT
+0000087135 [ncp.at] TRACE: > AT
+0000088135 [ncp.at] TRACE: > AT
+0000089135 [ncp.at] TRACE: > AT
+0000090135 [ncp.at] TRACE: > AT
+0000091135 [ncp.at] TRACE: > AT
+0000092135 [ncp.at] TRACE: > AT
+0000093135 [ncp.at] TRACE: > AT
+0000094135 [ncp.at] TRACE: > AT
+0000095135 [ncp.at] TRACE: > AT
+0000096135 [ncp.at] TRACE: > AT
+0000097135 [ncp.at] TRACE: > AT
+0000098135 [ncp.at] TRACE: > AT
+0000099135 [ncp.at] TRACE: > AT
+0000100135 [ncp.at] TRACE: > AT
+0000101135 [ncp.at] TRACE: > AT
+0000102135 [ncp.at] TRACE: > AT
+0000103135 [ncp.at] TRACE: > AT
+0000104135 [ncp.at] TRACE: > AT
+0000105135 [ncp.at] TRACE: > AT
+0000106135 [ncp.at] TRACE: > AT
+0000107135 [hal] ERROR: No response from NCP
+0000107135 [hal] TRACE: Setting UART voltage translator state 0
+0000107136 [hal] TRACE: Hard resetting the modem
+0000118137 [hal] TRACE: Setting UART voltage translator state 0
+0000118138 [hal] TRACE: Modem already off
+0000118238 [hal] TRACE: Powering modem on
+0000118388 [hal] TRACE: Modem powered on
+0000118389 [hal] TRACE: Setting UART voltage translator state 1
+0000119390 [ncp.at] TRACE: > AT
+0000120390 [ncp.at] TRACE: > AT
+0000121390 [ncp.at] TRACE: > AT
+
