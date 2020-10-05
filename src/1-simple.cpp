@@ -3,7 +3,7 @@
 SYSTEM_THREAD(ENABLED);
 SYSTEM_MODE(SEMI_AUTOMATIC);
 
-SerialLogHandler logHandler(LOG_LEVEL_TRACE);
+//SerialLogHandler logHandler(LOG_LEVEL_TRACE);
 CellularInterpreter cellularInterpreter;
 CellularInterpreterBlinkManager blinkManager;
 

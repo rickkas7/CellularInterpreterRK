@@ -99,13 +99,6 @@ CellularInterpreter::~CellularInterpreter() {
 }
 
 void CellularInterpreter::setup() {
-    // Allocate buffers
-    for(size_t ii = 0; ii < MAX_LINES; ii++) {
-        CellularInterpreterLineBuffer *b = new CellularInterpreterLineBuffer();
-        if (b) {
-            freeLines.push_back(b);
-        }
-    }
 
 	// Add this callback into the system log manager
 	LogManager::instance()->addHandler(this);
@@ -117,13 +110,22 @@ void CellularInterpreter::loop() {
     // generating logs
     loopThread = os_thread_current(NULL);
 	
-    while(!toProcessLines.empty()) {
-        CellularInterpreterLineBuffer *currentRead = toProcessLines.front();
-        toProcessLines.pop_front();
+    while(!logQueue.empty()) {
+        CellularInterpreterLogEntry *entry = logQueue.front();
+        logQueue.pop_front();
 
-        processLine(currentRead->lineBuffer);
+        processLog(entry->ts, entry->category, entry->level, entry->message);
 
-        freeLines.push_back(currentRead);
+        delete entry;
+    }
+
+    while(!commandQueue.empty()) {
+        CellularInterpreterCommandEntry *entry = commandQueue.front();
+        commandQueue.pop_front();
+
+        processCommand(entry->command, entry->toModem);
+
+        delete entry;
     }
 
     processTimeouts();
@@ -197,38 +199,25 @@ void CellularInterpreter::addUrcHandler(const char *urc, CellularInterpreterMode
 
 
 size_t CellularInterpreter::write(uint8_t c) {
+    
+    Serial.write(c); // TODO: This is temporary!
+
     // Do not add any _log.* statements in this function!
     if (loopThread && os_thread_is_current(loopThread)) {
         return 1;
     }
 
-    if (currentWrite == 0) {
-        // See if a line buffer is available now
-        if (!freeLines.empty()) {
-            currentWrite = freeLines.front();
-            freeLines.pop_front();
-        }
-        else {
-            return 1;
-        }
-    }
-
     if ((char)c == '\r') {
         // End of line, process this line
         
-        // offset will be at most LINE_BUFFER_SIZE - 1
+        // offset will be at most WRITE_BUF_SIZE - 1
         // so this is safe to null terminate the (possibly partial) line
         if (writeOffset > 0) {
-            currentWrite->lineBuffer[writeOffset] = 0;
-            toProcessLines.push_back(currentWrite);
+            writeBuffer[writeOffset] = 0;
 
-            if (!freeLines.empty()) {
-                currentWrite = freeLines.front();
-                freeLines.pop_front();
-            }
-            else {
-                currentWrite = 0;
-            }
+            processLine(writeBuffer);
+
+            writeOffset = 0;
         }
         writeOffset = 0;
     }
@@ -237,9 +226,9 @@ size_t CellularInterpreter::write(uint8_t c) {
         // Ignore LFs 
     }
     else
-    if (writeOffset < (CellularInterpreterLineBuffer::LINE_BUFFER_SIZE - 1)) {
+    if (writeOffset < (CellularInterpreter::WRITE_BUF_SIZE - 1)) {
         // Append other characters to the line if there's room
-        currentWrite->lineBuffer[writeOffset++] = (char) c;
+        writeBuffer[writeOffset++] = (char) c;
     }
     else {
         // Line is too long, ignore the rest 
@@ -293,6 +282,27 @@ void CellularInterpreter::processLine(char *lineBuffer) {
     // col=3 token=>
     // col=4 token=AT+COPS=3,2
 
+
+    /* TODO: Handle this sort of response better
+    0000004409 [ncp.at] TRACE: > AT+UGPIOC?
+    0000004410 [app.cellinterp] INFO: recv OK
+    0000004411 [app] INFO: processCommand command=AT+UGPIOC? toModem=1
+    0000004412 [app.cellinterp] INFO: send command AT+UGPIOC?
+    0000004422 [ncp.at] TRACE: < +UGPIOC:
+    0000004423 [ncp.at] TRACE: < 16,255
+    0000004423 [ncp.at] TRACE: < 19,255
+    0000004424 [ncp.at] TRACE: < 23,0
+    0000004425 [ncp.at] TRACE: < 24,255
+    0000004426 [ncp.at] TRACE: < 25,255
+    0000004426 [ncp.at] TRACE: < 42,255
+    0000004427 [ncp.at] TRACE: < OK
+    0000004428 [ncp.at] TRACE: > AT+UGPIOR=23
+    0000004430 [app] INFO: processCommand command=+UGPIOC: toModem=0
+    0000004430 [app.cellinterp] INFO: recv + +UGPIOC:
+    0000004431 [app] INFO: processCommand command=16,255 toModem=0
+    0000004432 [app] INFO: processCommand command=19,255 toModem=0
+    0000004433 [app] INFO: processCommand command=23,0 toModem=0
+    */
 
     // _log.info("processLine %s", lineBuffer);
 
@@ -363,8 +373,12 @@ void CellularInterpreter::processLine(char *lineBuffer) {
                 long ts = strtol(colTokens[0], &end, 10);
 
                 // _log.info("logger found 0:%s 1:%s 2:%s msg:%s", colTokens[0], colTokens[1], colTokens[2], msg);
-
-                processLog(ts, colTokens[1], colTokens[2], msg);
+                CellularInterpreterLogEntry *entry = new CellularInterpreterLogEntry();
+                entry->ts = ts;
+                entry->category = colTokens[1];
+                entry->level = colTokens[2];
+                entry->message = msg;
+                logQueue.push_back(entry);
                 break;
             }
         }
@@ -410,23 +424,28 @@ void CellularInterpreter::processLine(char *lineBuffer) {
                     }
                 }
             }
+        }
 
-            if (command) {
-                // We have a parsed command, Gen 2 or Gen 3
-                // Direction is in toModem (true = to modem, false = from modem)
-                // + response and OK/ERROR are issued in separate lines, so there needs to be additional 
-                // surrounding state
-                processCommand(command, toModem);
-                break;
-            }
-        }        
+        if (command) {
+            // We have a parsed command, Gen 2 or Gen 3
+            // Direction is in toModem (true = to modem, false = from modem)
+            // + response and OK/ERROR are issued in separate lines, so there needs to be additional 
+            // surrounding state
+            CellularInterpreterCommandEntry *entry = new CellularInterpreterCommandEntry();
+            entry->command = command;
+            entry->toModem = toModem;
+            commandQueue.push_back(entry); 
+            break;
+        }
+            
         token = strtok_r(NULL, " ", &saveptr);
     }
 
 }
 
-void CellularInterpreter::processCommand(char *command, bool toModem) {
+void CellularInterpreter::processCommand(const char *command, bool toModem) {
     // Note start of new command, + responses, OK/ERROR responses, and URCs here
+    Log.info("processCommand command=%s toModem=%d", command, toModem);
     if (toModem) {
         // Sending to modem
         if (ignoreNextSend) {
@@ -717,21 +736,9 @@ CellularInterpreterCheckNcpFailure::~CellularInterpreterCheckNcpFailure() {
 }
 
 void CellularInterpreterCheckNcpFailure::setup(CellularInterpreterCallback callback) {
-    // A better choice would have been
-    //      [hal] ERROR: No response from NCP
-    // however that message never gets picked up by the log handler for reasons that
-    // are not obvious to me.
-
-    CellularInterpreter::getInstance()->addModemMonitor("AT", CellularInterpreterModemMonitor::REASON_TIMEOUT, 
-        [](uint32_t, const char *) {
-            _log.info("CellularInterpreterCheckNcpFailure callback called");
-        },
-        800); // timeout milliseconds
-    
-    /*
     logMonitor.category = "hal";
     logMonitor.level = "ERROR";
-    logMonitor.matchString = "Failed to power off modem";
+    logMonitor.matchString = "No response from NCP";
     logMonitor.callback = [this, callback](long ts, const char *category, const char *level, const char *msg) {
         _log.info("CellularInterpreterCheckNcpFailure callback called");
         if (noResponseCount >= 0) {
@@ -747,8 +754,6 @@ void CellularInterpreterCheckNcpFailure::setup(CellularInterpreterCallback callb
     };
     
     CellularInterpreter::getInstance()->addLogMonitor(&logMonitor);
-    */
-
 }
 
 // static 

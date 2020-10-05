@@ -8,11 +8,6 @@
 
 #define TIMES_COLOR(n, c) (((n) << 24) | (c))
 
-class CellularInterpreterLineBuffer {
-public:
-    static const size_t LINE_BUFFER_SIZE = 128;
-    char        lineBuffer[LINE_BUFFER_SIZE];
-};
 
 typedef std::function<void()> CellularInterpreterCallback;
 
@@ -177,6 +172,20 @@ protected:
     static CellularInterpreterBlinkManager *instance;
 };
 
+class CellularInterpreterLogEntry {
+public:
+    long ts;
+    String category;
+    String level;
+    String message;
+};
+
+class CellularInterpreterCommandEntry {
+public:
+    String command;
+    bool toModem;
+};
+
 
 class CellularInterpreter : public StreamLogHandler, public Print  {
 public:
@@ -204,15 +213,9 @@ public:
      */
     void addUrcHandler(const char *urc, CellularInterpreterModemCallback callback);
 
-    /**
-     * @brief Handle a line in lineBuffer
-     * 
-     * As lineBuffer is relatively small, the results may be truncated. This call
-     * is made only after the whole line is received.
-     */
     void processLine(char *lineBuffer);
 
-    void processCommand(char *command, bool toModem);
+    void processCommand(const char *command, bool toModem);
 
     void callCommandMonitors(uint32_t reasonFlags, const char *command);
 
@@ -227,7 +230,9 @@ public:
 	 */
     virtual size_t write(uint8_t);
 
-    static const size_t MAX_LINES = 16;
+    
+    static const size_t WRITE_BUF_SIZE = 100;
+    static const size_t MAX_LINES = 30;
 
     static const uint32_t BLINK_NCP_FAILURE = TIMES_COLOR(5, RGB_COLOR_ORANGE);
 
@@ -236,13 +241,15 @@ public:
 
 
 protected:
-    CellularInterpreterLineBuffer *currentWrite = 0;
+    char     writeBuffer[WRITE_BUF_SIZE];
     size_t      writeOffset = 0;
 
-    std::deque<CellularInterpreterLineBuffer*> toProcessLines;
-    std::deque<CellularInterpreterLineBuffer*> freeLines;
     os_thread_t loopThread = 0;
     bool        ignoreNextSend = false;
+
+    std::deque<CellularInterpreterCommandEntry *> commandQueue;
+    std::deque<CellularInterpreterLogEntry *> logQueue;
+    
 
     std::vector<CellularInterpreterModemMonitor *> commandMonitors;
     std::vector<CellularInterpreterLogMonitor *> logMonitors;
@@ -260,7 +267,7 @@ public:
     static CellularInterpreterCheckNcpFailure *check(CellularInterpreterCallback callback = 0);
 
 protected:
-//    CellularInterpreterLogMonitor logMonitor;
+    CellularInterpreterLogMonitor logMonitor;
     int noResponseCount = 0;
 };
 
