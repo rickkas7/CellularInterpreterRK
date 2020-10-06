@@ -13,6 +13,7 @@ CellularInterpreterParser::~CellularInterpreterParser() {
 }
 
 void CellularInterpreterParser::clear() {
+    requestType = RequestType::UNKNOWN_REQUEST;
     command = "";
     args.clear();
 }
@@ -32,10 +33,26 @@ void CellularInterpreterParser::parse(const char *commandLineIn) {
     
     for(const char *cp = commandLineIn; *cp; cp++) {
         if (isAT) {
-            if (*cp == '=') {
-                // AT command ends at =
+            if (*cp == '=' || *cp == '?') {
+                // AT command ends at = or ?
                 command = curPart;
                 curPart = "";
+
+                if (*cp == '?') {
+                    requestType = RequestType::READ_REQUEST;
+                }
+                else {
+                    if (cp[1] == '?') {
+                        // =?
+                        requestType = RequestType::TEST_REQUEST;
+                        cp++;
+                    }
+                    else {
+                        // =
+                        requestType = RequestType::SET_REQUEST;
+                    }
+                }
+
                 isAT = false;
             }
         }
@@ -190,7 +207,7 @@ void CellularInterpreter::addModemMonitor(const char *cmdName, uint32_t reasonFl
 void CellularInterpreter::addUrcHandler(const char *urc, CellularInterpreterModemCallback callback) {
     CellularInterpreterModemMonitor *mon = new CellularInterpreterModemMonitor();
     mon->command = urc;
-    mon->reasonFlags = CellularInterpreterModemMonitor::REASON_PLUS;
+    mon->reasonFlags = CellularInterpreterModemMonitor::REASON_URC;
     mon->timeout = 0;
     mon->callback = callback;
 
@@ -445,7 +462,7 @@ void CellularInterpreter::processLine(char *lineBuffer) {
 
 void CellularInterpreter::processCommand(const char *command, bool toModem) {
     // Note start of new command, + responses, OK/ERROR responses, and URCs here
-    Log.info("processCommand command=%s toModem=%d", command, toModem);
+    // _log.info("processCommand command=%s toModem=%d", command, toModem);
     if (toModem) {
         // Sending to modem
         if (ignoreNextSend) {
@@ -460,7 +477,7 @@ void CellularInterpreter::processCommand(const char *command, bool toModem) {
         // Receiving data from modem
         if (command[0] == '+') {
             // + response to a command, or a URC
-            _log.info("recv + %s", command);        
+            _log.info("recv + or URC %s", command);        
 
             callCommandMonitors(CellularInterpreterModemMonitor::REASON_PLUS, command); 
         }
@@ -477,12 +494,12 @@ void CellularInterpreter::processCommand(const char *command, bool toModem) {
         }
         else 
         if (strcmp(command, "OK") == 0) {
-            _log.info("recv %s", command);        
+            _log.info("recv OK", command);        
             callCommandMonitors(CellularInterpreterModemMonitor::REASON_OK, command); 
         }
         else 
         if (strncmp(command, "ERROR", 5) == 0) {
-            _log.info("recv %s", command);       
+            _log.info("recv ERROR", command);       
             callCommandMonitors(CellularInterpreterModemMonitor::REASON_ERROR, command); 
         }
         else {
@@ -498,31 +515,41 @@ void CellularInterpreter::callCommandMonitors(uint32_t reasonFlags, const char *
     // Check command monitors
     for (std::vector<CellularInterpreterModemMonitor *>::iterator it = commandMonitors.begin() ; it != commandMonitors.end(); ++it) {
         CellularInterpreterModemMonitor *mon = *it;
-        if (strncmp(&command[1], mon->command.c_str(), mon->command.length()) == 0) {
-            if (command[mon->command.length() + 1] == ':') {
-                // Matching command or URC
-                if ((reasonFlags & mon->reasonFlags) != 0) {
-                    // Handler is interested in this reason
-                    if (mon->callback) {
-                        mon->callback(reasonFlags, command);
-                    }
+        if (isMatchingCommand(command, mon->command)) {
+            // Matching command or URC
+            if ((reasonFlags & CellularInterpreterModemMonitor::REASON_PLUS) != 0) {
+                // A + can be a URC if there was no send
+                if (mon->nextTimeout == 0) {
+                    // Yes, it's a URC, change the reason from PLUS to URC
+                    _log.info("converting PLUS to URC %s", command);
+                    reasonFlags &= ~CellularInterpreterModemMonitor::REASON_PLUS;
+                    reasonFlags |= CellularInterpreterModemMonitor::REASON_URC;
                 }
-
-                if ((reasonFlags & CellularInterpreterModemMonitor::REASON_SEND) != 0) {
-                    // Sending a command, start timeout
-                    if (mon->timeout) {
-                        mon->nextTimeout = System.millis() + mon->timeout;
-                    }
-                    else {
-                        mon->nextTimeout = 0;
-                    }
-                }
-                else
-                if ((reasonFlags & (CellularInterpreterModemMonitor::REASON_OK | CellularInterpreterModemMonitor::REASON_ERROR)) != 0) {
-                    // On OK or ERROR, clear timeout
-                    mon->nextTimeout = 0;
-                }                    
             }
+
+            if ((reasonFlags & mon->reasonFlags) != 0) {
+                // Handler is interested in this reason
+                if (mon->callback) {
+                    mon->callback(reasonFlags, command);
+                }
+            }
+
+            if ((reasonFlags & CellularInterpreterModemMonitor::REASON_SEND) != 0) {
+                // Sending a command, start timeout
+                mon->request.clear();
+                mon->request.parse(command);
+                if (mon->timeout) {
+                    mon->nextTimeout = System.millis() + mon->timeout;
+                }
+                else {
+                    mon->nextTimeout = 0;
+                }
+            }
+            else
+            if ((reasonFlags & (CellularInterpreterModemMonitor::REASON_OK | CellularInterpreterModemMonitor::REASON_ERROR)) != 0) {
+                // On OK or ERROR, clear timeout
+                mon->nextTimeout = 0;
+            }                    
         }
     }
 }
@@ -566,6 +593,77 @@ void CellularInterpreter::processLog(long ts, const char *category, const char *
         }
     }
 }
+
+// [static]
+bool CellularInterpreter::isMatchingCommand(const char *test, const char *cmd) {
+    size_t start = 0;
+    if (test[0] == '+') {
+        // Plus response or URC
+        start = 1;
+    }
+    else 
+    if (strncmp(test, "AT+", 3) == 0) {
+        // Sending command
+        start = 3;
+    }
+
+    size_t cmdLen = strlen(cmd);
+
+    if (strncmp(&test[start], cmd, cmdLen) == 0) {
+        switch(test[start + cmdLen]) {
+        case 0:
+        case '+':
+        case '?':
+        case ':':
+            // Is a match!
+            return true;
+
+        default:
+            break;
+        }
+    }
+    return false;
+}
+
+// [static] 
+String CellularInterpreter::mapValueToString(const char *mapping, int value) {
+    
+    for(const char *cp = mapping; *cp;) {
+        String numStr;
+        while(*cp && *cp != ':') {
+            numStr += *cp++;
+        }
+        if (!*cp++) {
+            break;
+        }
+        while(*cp && *cp == ' ') {
+            cp++;
+        }
+        if (!*cp) {
+            break;
+        }
+
+        int num = atoi(numStr);
+
+        // _log.info("testing numStr=%s num=%d", numStr.c_str(), value);
+
+        if (num == value) {
+            String desc;
+
+            // This is what we're looking for
+            while(*cp && *cp != '\n') {
+                desc += *cp++;
+            }
+            return desc;
+        }
+        // Skip to next
+        while(*cp && *cp++ != '\n') {
+        }
+    }
+    // Unknown code
+    return String::format("unknown %d", value);
+}
+
 
 
 CellularInterpreterBlinkPattern::CellularInterpreterBlinkPattern() {
@@ -756,11 +854,148 @@ void CellularInterpreterCheckNcpFailure::setup(CellularInterpreterCallback callb
     CellularInterpreter::getInstance()->addLogMonitor(&logMonitor);
 }
 
-// static 
+// [static]
 CellularInterpreterCheckNcpFailure *CellularInterpreterCheckNcpFailure::check(CellularInterpreterCallback callback) {
     CellularInterpreterCheckNcpFailure *obj = new CellularInterpreterCheckNcpFailure();
     if (obj) {
         obj->setup(callback);
+    }
+    return obj;
+}
+
+//
+//
+// 
+CellularInterpreterHelpCellularConnection::CellularInterpreterHelpCellularConnection() {
+}
+
+
+CellularInterpreterHelpCellularConnection::~CellularInterpreterHelpCellularConnection() {
+}
+
+static const char _ceregStatMapping[] = 
+    "0: not registered, not searching\n"
+    "1: registered, home network\n"
+    "2: not registered, searching\n"
+    "3: registration denied\n"
+    "4: unknown, may be out of coverage area\n"
+    "5: registered, roaming\n"
+    "8: emergency service only\n";
+
+static const char _ceregActMapping[] = 
+    "7: LTE\n"
+    "8: LTE Cat-M1\n"
+    "9: LTE Cat-NB1\n";
+
+static const char _copsModeMapping[] = 
+    "0: automatic\n"
+    "1: manual\n"
+    "2: deregister\n"
+    "3: set format\n"
+    "4: manual/automatic\n";
+
+static const char _copsStatMapping[] = 
+    "0: unknown\n"
+    "1: available\n"
+    "2: current\n"
+    "3: forbidden\n";
+
+static const char _umnoProfMapping[] = 
+    "0: default\n"
+    "1: SIM ICCID select\n"
+    "2: AT&T\n"
+    "3: Verizon\n"
+    "19: Vodafone\n"
+    "21: Telus\n"
+    "31: Deutsche Telekom\n"
+    "100: European\n"
+    "101: European (no ePCO)\n"
+    "198: AT&T (no band 5)\n";
+
+
+void CellularInterpreterHelpCellularConnection::setup() {
+    CellularInterpreter::getInstance()->addModemMonitor(
+            "CEREG", 
+            CellularInterpreterModemMonitor::REASON_PLUS | CellularInterpreterModemMonitor::REASON_URC,
+            [](uint32_t reason, const char *cmd) {
+        // 
+        CellularInterpreterParser parser;
+        parser.parse(cmd);
+        
+        size_t statArg;
+        
+        if ((reason & CellularInterpreterModemMonitor::REASON_PLUS) != 0) {
+            // Response
+            // int n = getArgInt(0);
+            // _log.info("REASON_PLUS: %s", cmd);
+            statArg = 1;
+        }
+        else {
+            // URC
+            // _log.info("REASON_URC: %s", cmd);
+            statArg = 0;
+        }
+        int stat = parser.getArgInt(statArg);
+
+        String statStr = CellularInterpreter::mapValueToString(_ceregStatMapping, stat);
+
+        _log.info("Registration Status: %s", statStr.c_str());
+
+        if (stat == 1 || stat == 5) {
+            if (parser.getNumArgs() >= (statArg + 4)) {
+                _log.info("Tracking area code: %s", parser.getArgString(statArg +1).c_str());
+                _log.info("Cell identifier: %s", parser.getArgString(statArg + 2).c_str());
+                int act = parser.getArgInt(statArg + 3);
+                String actStr = CellularInterpreter::mapValueToString(_ceregActMapping, act); 
+                _log.info("Access techology: %s", actStr.c_str());
+            }
+        }
+    });
+
+    CellularInterpreter::getInstance()->addModemMonitor(
+            "COPS", 
+            CellularInterpreterModemMonitor::REASON_SEND | CellularInterpreterModemMonitor::REASON_PLUS,
+            [](uint32_t reason, const char *cmd) {
+        // 
+        CellularInterpreterParser parser;
+        parser.parse(cmd);
+
+        if ((reason & CellularInterpreterModemMonitor::REASON_SEND) != 0) {
+            // Request
+            
+        }
+        else {
+            // Response
+        }
+        
+    });
+
+    CellularInterpreter::getInstance()->addModemMonitor(
+            "UMNOPROF", 
+            CellularInterpreterModemMonitor::REASON_PLUS,
+            [](uint32_t reason, const char *cmd) {
+        // 
+        CellularInterpreterParser parser;
+        parser.parse(cmd);
+
+        int prof = parser.getArgInt(0);
+
+        String profStr = CellularInterpreter::mapValueToString(_umnoProfMapping, prof);
+
+        _log.info("Mobile Network Operator Profile: %s", profStr.c_str());
+
+        
+    });
+
+
+    
+}
+
+// [static]
+CellularInterpreterHelpCellularConnection *CellularInterpreterHelpCellularConnection::check() {
+    CellularInterpreterHelpCellularConnection *obj = new CellularInterpreterHelpCellularConnection();
+    if (obj) {
+        obj->setup();
     }
     return obj;
 }

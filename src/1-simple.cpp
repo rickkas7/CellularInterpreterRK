@@ -14,7 +14,8 @@ void setup() {
     blinkManager.setup();
 
     CellularInterpreterCheckNcpFailure::check();
-
+    CellularInterpreterHelpCellularConnection::check();
+    
     // Register a URC handler
     cellularInterpreter.addUrcHandler("CREG", [](unsigned long reason, const char *command) {
         Log.info("URC handler for +CREG URC called!");

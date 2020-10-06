@@ -11,48 +11,15 @@
 
 typedef std::function<void()> CellularInterpreterCallback;
 
-
-typedef std::function<void(long ts, const char *category, const char *level, const char *msg)> CellularInterpreterLogCallback;
-
-class CellularInterpreterLogMonitor {
-public:
-    String category;
-    String level;
-    String matchString;
-    
-    CellularInterpreterLogCallback callback;
-};
-
-typedef std::function<void(uint32_t, const char *)> CellularInterpreterModemCallback;
-
-/**
- * @brief Class to monitor the modem commands
- */
-class CellularInterpreterModemMonitor {
-public:
-    static const uint32_t REASON_OK             = 0x00000001;
-    static const uint32_t REASON_PLUS           = 0x00000002; // Also URC
-    static const uint32_t REASON_ERROR          = 0x00000004;
-    static const uint32_t REASON_SEND           = 0x00000008;
-    static const uint32_t REASON_TIMEOUT        = 0x00000010;
-
-    String command;
-    uint32_t reasonFlags = 0;
-    CellularInterpreterModemCallback callback;
-    uint32_t timeout = 10000;
-    uint64_t nextTimeout = 0;
-};
-
-class CellularInterpreterCommand {
-public:
-    String command;
-    unsigned long startTime;
-    bool gotPlus;
-    bool complete;
-};
-
 class CellularInterpreterParser {
 public:
+    enum class RequestType : int {
+        UNKNOWN_REQUEST = 0,
+        SET_REQUEST,
+        READ_REQUEST,
+        TEST_REQUEST
+    };
+
     CellularInterpreterParser();
     virtual ~CellularInterpreterParser();
 
@@ -95,10 +62,59 @@ public:
      */
     String getCommand() const { return command; };
 
+    RequestType getRequestType() const { return requestType; };
+    bool isSet() const { return requestType == RequestType::SET_REQUEST; };
+    bool isRead() const { return requestType == RequestType::READ_REQUEST; };
+    bool isTest() const { return requestType == RequestType::TEST_REQUEST; };
+
 protected:
+    RequestType requestType = RequestType::UNKNOWN_REQUEST;
     String command;
     std::vector<String> args;
 };
+
+
+typedef std::function<void(long ts, const char *category, const char *level, const char *msg)> CellularInterpreterLogCallback;
+
+class CellularInterpreterLogMonitor {
+public:
+    String category;
+    String level;
+    String matchString;
+    
+    CellularInterpreterLogCallback callback;
+};
+
+typedef std::function<void(uint32_t, const char *)> CellularInterpreterModemCallback;
+
+/**
+ * @brief Class to monitor the modem commands
+ */
+class CellularInterpreterModemMonitor {
+public:
+    static const uint32_t REASON_OK             = 0x00000001;
+    static const uint32_t REASON_PLUS           = 0x00000002;
+    static const uint32_t REASON_ERROR          = 0x00000004;
+    static const uint32_t REASON_SEND           = 0x00000008;
+    static const uint32_t REASON_TIMEOUT        = 0x00000010;
+    static const uint32_t REASON_URC            = 0x00000020;
+
+    String command;
+    uint32_t reasonFlags = 0;
+    CellularInterpreterModemCallback callback;
+    uint32_t timeout = 10000;
+    uint64_t nextTimeout = 0;
+    CellularInterpreterParser request;
+};
+
+class CellularInterpreterCommand {
+public:
+    String command;
+    unsigned long startTime;
+    bool gotPlus;
+    bool complete;
+};
+
 
 class CellularInterpreterBlinkPattern {
 public:
@@ -236,6 +252,9 @@ public:
 
     static const uint32_t BLINK_NCP_FAILURE = TIMES_COLOR(5, RGB_COLOR_ORANGE);
 
+    static bool isMatchingCommand(const char *test, const char *cmd);
+
+    static String mapValueToString(const char *mapping, int value);
 
     static CellularInterpreter *getInstance() { return instance; };
 
@@ -271,5 +290,24 @@ protected:
     int noResponseCount = 0;
 };
 
+/**
+ * @brief Generate helpful messages to help decode the cellular commands, particularly for connection failures
+ * 
+ * Just call CellularInterpreterHelpCellularConnection::check() from setup() to enable after calling
+ * CellularInterpreter::setup().
+ * 
+ * This is only intended for human-readable applications.
+ */
+class CellularInterpreterHelpCellularConnection {
+public:
+    CellularInterpreterHelpCellularConnection();
+    virtual ~CellularInterpreterHelpCellularConnection();
+
+    void setup();
+
+    static CellularInterpreterHelpCellularConnection *check();
+
+protected:
+};
 
 #endif /* __CELLULARINTERPRETER_H */
