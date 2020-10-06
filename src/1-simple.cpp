@@ -16,6 +16,8 @@ void setup() {
     CellularInterpreterCheckNcpFailure::check();
     CellularInterpreterHelpCellularConnection::check();
     
+    /*
+    // Note: Code uses old API, rewrite!
     // Register a URC handler
     cellularInterpreter.addUrcHandler("CREG", [](unsigned long reason, const char *command) {
         Log.info("URC handler for +CREG URC called!");
@@ -33,6 +35,7 @@ void setup() {
     cellularInterpreter.addLogMonitor("comm.dtls", NULL, NULL, [](long ts, const char *category, const char *level, const char *msg) {
         Log.info("got a comm.dtls message! ts=%lu category=%s level=%s msg=%s", ts, category, level, msg);
     });
+    */
 
     Particle.connect();
 }

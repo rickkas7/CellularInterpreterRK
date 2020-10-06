@@ -85,7 +85,9 @@ public:
     CellularInterpreterLogCallback callback;
 };
 
-typedef std::function<void(uint32_t, const char *)> CellularInterpreterModemCallback;
+class CellularInterpreterModemMonitor; // Forward declaration
+
+typedef std::function<void(uint32_t reason, const char *cmd, CellularInterpreterModemMonitor *mon)> CellularInterpreterModemCallback;
 
 /**
  * @brief Class to monitor the modem commands
@@ -265,6 +267,7 @@ protected:
 
     os_thread_t loopThread = 0;
     bool        ignoreNextSend = false;
+    String lastCommand;
 
     std::deque<CellularInterpreterCommandEntry *> commandQueue;
     std::deque<CellularInterpreterLogEntry *> logQueue;

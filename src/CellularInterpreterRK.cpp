@@ -470,14 +470,15 @@ void CellularInterpreter::processCommand(const char *command, bool toModem) {
             ignoreNextSend = false;
             return;
         }
-        _log.info("send command %s", command);        
+        // _log.info("send command %s", command);        
         callCommandMonitors(CellularInterpreterModemMonitor::REASON_SEND, command); 
+        lastCommand = command;
     }
     else {
         // Receiving data from modem
         if (command[0] == '+') {
             // + response to a command, or a URC
-            _log.info("recv + or URC %s", command);        
+            // _log.info("recv + or URC %s", command);        
 
             callCommandMonitors(CellularInterpreterModemMonitor::REASON_PLUS, command); 
         }
@@ -494,13 +495,15 @@ void CellularInterpreter::processCommand(const char *command, bool toModem) {
         }
         else 
         if (strcmp(command, "OK") == 0) {
-            _log.info("recv OK", command);        
-            callCommandMonitors(CellularInterpreterModemMonitor::REASON_OK, command); 
+            // _log.info("recv OK lastCommand=%s", lastCommand.c_str());        
+            callCommandMonitors(CellularInterpreterModemMonitor::REASON_OK, lastCommand); 
+            lastCommand = "";
         }
         else 
         if (strncmp(command, "ERROR", 5) == 0) {
-            _log.info("recv ERROR", command);       
-            callCommandMonitors(CellularInterpreterModemMonitor::REASON_ERROR, command); 
+            // _log.info("recv ERROR lastCommand=%s", lastCommand.c_str());       
+            callCommandMonitors(CellularInterpreterModemMonitor::REASON_ERROR, lastCommand); 
+            lastCommand = "";
         }
         else {
             // There are a bunch of other responses here like:
@@ -521,7 +524,7 @@ void CellularInterpreter::callCommandMonitors(uint32_t reasonFlags, const char *
                 // A + can be a URC if there was no send
                 if (mon->nextTimeout == 0) {
                     // Yes, it's a URC, change the reason from PLUS to URC
-                    _log.info("converting PLUS to URC %s", command);
+                    // _log.info("converting PLUS to URC %s", command);
                     reasonFlags &= ~CellularInterpreterModemMonitor::REASON_PLUS;
                     reasonFlags |= CellularInterpreterModemMonitor::REASON_URC;
                 }
@@ -530,7 +533,7 @@ void CellularInterpreter::callCommandMonitors(uint32_t reasonFlags, const char *
             if ((reasonFlags & mon->reasonFlags) != 0) {
                 // Handler is interested in this reason
                 if (mon->callback) {
-                    mon->callback(reasonFlags, command);
+                    mon->callback(reasonFlags, command, mon);
                 }
             }
 
@@ -548,6 +551,7 @@ void CellularInterpreter::callCommandMonitors(uint32_t reasonFlags, const char *
             else
             if ((reasonFlags & (CellularInterpreterModemMonitor::REASON_OK | CellularInterpreterModemMonitor::REASON_ERROR)) != 0) {
                 // On OK or ERROR, clear timeout
+                // _log.info("clearing timeout on %s", mon->command.c_str());
                 mon->nextTimeout = 0;
             }                    
         }
@@ -654,7 +658,7 @@ String CellularInterpreter::mapValueToString(const char *mapping, int value) {
             while(*cp && *cp != '\n') {
                 desc += *cp++;
             }
-            return desc;
+            return String::format("%s (%d)", desc.c_str(), value);
         }
         // Skip to next
         while(*cp && *cp++ != '\n') {
@@ -873,6 +877,8 @@ CellularInterpreterHelpCellularConnection::CellularInterpreterHelpCellularConnec
 CellularInterpreterHelpCellularConnection::~CellularInterpreterHelpCellularConnection() {
 }
 
+static Logger _logHelp("app.cellhelp");
+
 static const char _ceregStatMapping[] = 
     "0: not registered, not searching\n"
     "1: registered, home network\n"
@@ -893,6 +899,11 @@ static const char _copsModeMapping[] =
     "2: deregister\n"
     "3: set format\n"
     "4: manual/automatic\n";
+
+static const char _copsFormatMapping[] = 
+    "0: long alphanumeric\n"
+    "1: short alphanumeric\n"
+    "2: numeric\n";
 
 static const char _copsStatMapping[] = 
     "0: unknown\n"
@@ -917,7 +928,7 @@ void CellularInterpreterHelpCellularConnection::setup() {
     CellularInterpreter::getInstance()->addModemMonitor(
             "CEREG", 
             CellularInterpreterModemMonitor::REASON_PLUS | CellularInterpreterModemMonitor::REASON_URC,
-            [](uint32_t reason, const char *cmd) {
+            [](uint32_t reason, const char *cmd, CellularInterpreterModemMonitor *mon) {
         // 
         CellularInterpreterParser parser;
         parser.parse(cmd);
@@ -927,27 +938,27 @@ void CellularInterpreterHelpCellularConnection::setup() {
         if ((reason & CellularInterpreterModemMonitor::REASON_PLUS) != 0) {
             // Response
             // int n = getArgInt(0);
-            // _log.info("REASON_PLUS: %s", cmd);
+            _logHelp.info("REASON_PLUS: %s", cmd);
             statArg = 1;
         }
         else {
             // URC
-            // _log.info("REASON_URC: %s", cmd);
+            _logHelp.info("REASON_URC: %s", cmd);
             statArg = 0;
         }
         int stat = parser.getArgInt(statArg);
 
         String statStr = CellularInterpreter::mapValueToString(_ceregStatMapping, stat);
 
-        _log.info("Registration Status: %s", statStr.c_str());
+        _logHelp.info("Registration Status: %s", statStr.c_str());
 
         if (stat == 1 || stat == 5) {
             if (parser.getNumArgs() >= (statArg + 4)) {
-                _log.info("Tracking area code: %s", parser.getArgString(statArg +1).c_str());
-                _log.info("Cell identifier: %s", parser.getArgString(statArg + 2).c_str());
+                _logHelp.info("Tracking area code: %s", parser.getArgString(statArg +1).c_str());
+                _logHelp.info("Cell identifier: %s", parser.getArgString(statArg + 2).c_str());
                 int act = parser.getArgInt(statArg + 3);
                 String actStr = CellularInterpreter::mapValueToString(_ceregActMapping, act); 
-                _log.info("Access techology: %s", actStr.c_str());
+                _logHelp.info("Access techology: %s", actStr.c_str());
             }
         }
     });
@@ -955,17 +966,39 @@ void CellularInterpreterHelpCellularConnection::setup() {
     CellularInterpreter::getInstance()->addModemMonitor(
             "COPS", 
             CellularInterpreterModemMonitor::REASON_SEND | CellularInterpreterModemMonitor::REASON_PLUS,
-            [](uint32_t reason, const char *cmd) {
+            [](uint32_t reason, const char *cmd, CellularInterpreterModemMonitor *mon) {
         // 
         CellularInterpreterParser parser;
         parser.parse(cmd);
 
         if ((reason & CellularInterpreterModemMonitor::REASON_SEND) != 0) {
             // Request
-            
+            _logHelp.info("COPS SEND: %s", cmd);
+            if (parser.isSet()) {
+                _logHelp.info("Operation Selection Set: mode=%s format=%s",
+                    CellularInterpreter::mapValueToString(_copsModeMapping, parser.getArgInt(0)).c_str(),
+                    CellularInterpreter::mapValueToString(_copsFormatMapping, parser.getArgInt(1)).c_str());
+            }
         }
         else {
             // Response
+            if (mon->request.isRead()) {
+                if (parser.getNumArgs() >= 1) {
+                    _logHelp.info("Operation Selection Read: mode=%s",
+                        CellularInterpreter::mapValueToString(_copsModeMapping, parser.getArgInt(0)).c_str());
+                }
+                if (parser.getNumArgs() >= 2) {
+                    _logHelp.info("  format=%s",
+                        CellularInterpreter::mapValueToString(_copsFormatMapping, parser.getArgInt(1)).c_str());
+                }
+                if (parser.getNumArgs() >= 3) {
+                    _logHelp.info("  oper=%s",
+                        parser.getArgString(2).c_str());
+                }
+            }
+            else {
+
+            }
         }
         
     });
@@ -973,7 +1006,7 @@ void CellularInterpreterHelpCellularConnection::setup() {
     CellularInterpreter::getInstance()->addModemMonitor(
             "UMNOPROF", 
             CellularInterpreterModemMonitor::REASON_PLUS,
-            [](uint32_t reason, const char *cmd) {
+            [](uint32_t reason, const char *cmd, CellularInterpreterModemMonitor *mon) {
         // 
         CellularInterpreterParser parser;
         parser.parse(cmd);
@@ -982,7 +1015,7 @@ void CellularInterpreterHelpCellularConnection::setup() {
 
         String profStr = CellularInterpreter::mapValueToString(_umnoProfMapping, prof);
 
-        _log.info("Mobile Network Operator Profile: %s", profStr.c_str());
+        _logHelp.info("Mobile Network Operator Profile (UMNOPROF): %s", profStr.c_str());
 
         
     });
